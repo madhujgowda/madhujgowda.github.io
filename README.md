@@ -1,1 +1,1 @@
- <a href="https://madhujgowda.github.io/">madhujgowda.github.io</a>
+ <a href="https://madhujgowda.github.io/" target="_BLANK">madhujgowda.github.io</a>
