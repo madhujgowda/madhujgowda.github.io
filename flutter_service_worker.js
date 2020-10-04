@@ -4,7 +4,8 @@ const TEMP = 'flutter-temp-cache';
 const CACHE_NAME = 'flutter-app-cache';
 const RESOURCES = {
   "assets/AssetManifest.json": "3913dc4f9bc87ee789ddec51a5980e74",
-"assets/FontManifest.json": "69d6e67364056f3220a6c087a4a8a2b8",
+"assets/FontManifest.json": "dd1229ba0db12277f1439968bcc7909f",
+"assets/fonts/MaterialIcons-Regular.otf": "1288c9e28052e028aba623321f7826ac",
 "assets/fonts/MaterialIcons-Regular.ttf": "56d3ffdef7a25659eab6a68a3fbfaf16",
 "assets/fonts/RobotoSlab-Regular.ttf": "2e935203e7200edebf345ee19a80f435",
 "assets/images/profilePic.jpg": "f667109aeec65c1d387153431c43f7ec",
@@ -15,14 +16,14 @@ const RESOURCES = {
 "assets/images/socialmedia/linkedIn.png": "e7d459e9dd8999fb72a00da0fc04d046",
 "assets/images/socialmedia/stackoverflow.png": "4343487542fdc03215ee4957609d6ed6",
 "assets/images/socialmedia/twitter.png": "0e1c91c71ddb77d1d5917442c0ecc387",
-"assets/NOTICES": "66f0c91aa7a4fb1d2548c15abdfbe4e3",
+"assets/NOTICES": "ba95a440bda5b5bfa6aa614260b6e103",
 "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf": "115e937bb829a890521f72d2e664b632",
 "favicon.png": "5dcef449791fa27946b3d35ad8803796",
 "icons/Icon-192.png": "ac9a721a12bbc803b44f645561ecb1e1",
 "icons/Icon-512.png": "96e752610906ba2a93c65f8abe1645f1",
-"index.html": "ec44da294ee55a35fb58fe0c2b40cf57",
-"/": "ec44da294ee55a35fb58fe0c2b40cf57",
-"main.dart.js": "cfe29a99e1fcf8708f9d28b55ca83003",
+"index.html": "c237b34c26cebc9dd804eeb0d38b782e",
+"/": "c237b34c26cebc9dd804eeb0d38b782e",
+"main.dart.js": "91d90265ffa655ce5b7cbb2ce071987b",
 "manifest.json": "4687e6b97134bd54ce60622ede735eb4"
 };
 
@@ -32,16 +33,15 @@ const CORE = [
   "/",
 "main.dart.js",
 "index.html",
-"assets/LICENSE",
+"assets/NOTICES",
 "assets/AssetManifest.json",
 "assets/FontManifest.json"];
-
 // During install, the TEMP cache is populated with the application shell files.
 self.addEventListener("install", (event) => {
   return event.waitUntil(
     caches.open(TEMP).then((cache) => {
-      // Provide a no-cache param to ensure the latest version is downloaded.
-      return cache.addAll(CORE.map((value) => new Request(value, {'cache': 'no-cache'})));
+      return cache.addAll(
+        CORE.map((value) => new Request(value + '?revision=' + RESOURCES[value], {'cache': 'reload'})));
     })
   );
 });
@@ -56,7 +56,6 @@ self.addEventListener("activate", function(event) {
       var tempCache = await caches.open(TEMP);
       var manifestCache = await caches.open(MANIFEST);
       var manifest = await manifestCache.match('manifest');
-
       // When there is no prior manifest, clear the entire cache.
       if (!manifest) {
         await caches.delete(CACHE_NAME);
@@ -70,7 +69,6 @@ self.addEventListener("activate", function(event) {
         await manifestCache.put('manifest', new Response(JSON.stringify(RESOURCES)));
         return;
       }
-
       var oldManifest = await manifest.json();
       var origin = self.location.origin;
       for (var request of await contentCache.keys()) {
@@ -111,21 +109,26 @@ self.addEventListener("fetch", (event) => {
   var origin = self.location.origin;
   var key = event.request.url.substring(origin.length + 1);
   // Redirect URLs to the index.html
-  if (event.request.url == origin || event.request.url.startsWith(origin + '/#')) {
+  if (key.indexOf('?v=') != -1) {
+    key = key.split('?v=')[0];
+  }
+  if (event.request.url == origin || event.request.url.startsWith(origin + '/#') || key == '') {
     key = '/';
   }
-  // If the URL is not the the RESOURCE list, skip the cache.
+  // If the URL is not the RESOURCE list, skip the cache.
   if (!RESOURCES[key]) {
     return event.respondWith(fetch(event.request));
+  }
+  // If the URL is the index.html, perform an online-first request.
+  if (key == '/') {
+    return onlineFirst(event);
   }
   event.respondWith(caches.open(CACHE_NAME)
     .then((cache) =>  {
       return cache.match(event.request).then((response) => {
         // Either respond with the cached resource, or perform a fetch and
-        // lazily populate the cache. Ensure the resources are not cached
-        // by the browser for longer than the service worker expects.
-        var modifiedRequest = new Request(event.request, {'cache': 'no-cache'});
-        return response || fetch(modifiedRequest).then((response) => {
+        // lazily populate the cache.
+        return response || fetch(event.request).then((response) => {
           cache.put(event.request, response.clone());
           return response;
         });
@@ -137,11 +140,10 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener('message', (event) => {
   // SkipWaiting can be used to immediately activate a waiting service worker.
   // This will also require a page refresh triggered by the main worker.
-  if (event.message == 'skipWaiting') {
+  if (event.data === 'skipWaiting') {
     return self.skipWaiting();
   }
-
-  if (event.message = 'downloadOffline') {
+  if (event.message === 'downloadOffline') {
     downloadOffline();
   }
 });
@@ -161,8 +163,30 @@ async function downloadOffline() {
   }
   for (var resourceKey in Object.keys(RESOURCES)) {
     if (!currentContent[resourceKey]) {
-      resources.add(resourceKey);
+      resources.push(resourceKey);
     }
   }
-  return Cache.addAll(resources);
+  return contentCache.addAll(resources);
+}
+
+// Attempt to download the resource online before falling back to
+// the offline cache.
+function onlineFirst(event) {
+  return event.respondWith(
+    fetch(event.request).then((response) => {
+      return caches.open(CACHE_NAME).then((cache) => {
+        cache.put(event.request, response.clone());
+        return response;
+      });
+    }).catch((error) => {
+      return caches.open(CACHE_NAME).then((cache) => {
+        return cache.match(event.request).then((response) => {
+          if (response != null) {
+            return response;
+          }
+          throw error;
+        });
+      });
+    })
+  );
 }
